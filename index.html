@@ -87,7 +87,7 @@
     .status-confirmed {
       background-color: #9E9E9E;
       /* Grey */
-      cursor: default;
+      cursor: pointer;
     }
 
     .status-open:hover {
@@ -175,6 +175,7 @@
       <h3>근무 신청</h3>
       <p id="modal-shift-name"></p>
       <input type="text" id="doctorName" placeholder="이름을 입력하세요 (예: 홍길동)">
+      <input type="email" id="doctorEmail" placeholder="이메일 (선택사항 - 캘린더 등록용)">
       <div class="btn-group">
         <button class="btn-cancel" onclick="closeModal()">취소</button>
         <button class="btn-submit" onclick="submitBooking()">신청하기</button>
@@ -184,9 +185,20 @@
 
   <script>
     let currentEventId = null;
+    let doctorEmailMap = {};
 
     window.onload = function () {
       loadData();
+
+      // Auto-fill Logic
+      const nameInput = document.getElementById('doctorName');
+      nameInput.addEventListener('input', function () {
+        const name = this.value.trim();
+        const emailInput = document.getElementById('doctorEmail');
+        if (doctorEmailMap[name]) {
+          emailInput.value = doctorEmailMap[name];
+        }
+      });
     };
 
     function loadData() {
@@ -200,6 +212,9 @@
       document.getElementById('loading').style.display = 'none';
       const calendarEl = document.getElementById('calendar');
       calendarEl.style.display = 'grid';
+
+      // Store email map
+      doctorEmailMap = data.doctorEmails || {};
 
       // Set Title
       document.getElementById('month-title').textContent = `${data.year}년 ${data.month}월 응급실 근무표`;
@@ -272,6 +287,7 @@
       currentEventId = eventId;
       const titleEl = document.getElementById('modal-shift-name');
       const inputEl = document.getElementById('doctorName');
+      const emailEl = document.getElementById('doctorEmail');
       const submitBtn = document.querySelector('.btn-submit');
       const cancelBtn = document.getElementById('btn-delete'); // New button
 
@@ -294,16 +310,27 @@
       document.getElementById('btn-delete').style.display = 'none';
       submitBtn.style.display = 'inline-block';
       inputEl.style.display = 'block';
+      emailEl.style.display = 'block';
 
       if (status === 'CONFIRMED') {
         titleEl.innerHTML = `${shiftName}<br><small>현재 당직자: <b>${doctorName}</b></small>`;
         inputEl.style.display = 'none'; // Hide input for cancel-only mode
+        emailEl.style.display = 'none';
         submitBtn.style.display = 'none'; // Hide submit
         document.getElementById('btn-delete').style.display = 'inline-block'; // Show delete
       } else {
-        inputEl.value = '';
+        // Load from LocalStorage if available
+        const savedName = localStorage.getItem('er_doctor_name') || '';
+        const savedEmail = localStorage.getItem('er_doctor_email') || '';
+
+        inputEl.value = savedName;
+        emailEl.value = savedEmail;
+
         inputEl.placeholder = "이름을 입력하세요 (예: 홍길동)";
-        document.getElementById('doctorName').focus();
+
+        if (!savedName) {
+          document.getElementById('doctorName').focus();
+        }
       }
 
       document.getElementById('bookingModal').style.display = 'flex';
@@ -316,12 +343,18 @@
 
     function submitBooking() {
       const name = document.getElementById('doctorName').value;
+      const email = document.getElementById('doctorEmail').value;
+
       if (!name.trim()) {
         alert('이름을 입력해주세요.');
         return;
       }
 
       if (!confirm(`${name} 선생님으로 신청하시겠습니까?`)) return;
+
+      // Save to LocalStorage
+      localStorage.setItem('er_doctor_name', name);
+      localStorage.setItem('er_doctor_email', email);
 
       const submitBtn = document.querySelector('.btn-submit');
       submitBtn.textContent = '처리중...';
@@ -340,7 +373,7 @@
           submitBtn.textContent = '신청하기';
           submitBtn.disabled = false;
         })
-        .bookShift(currentEventId, name);
+        .bookShift(currentEventId, name, email);
     }
 
     function cancelBooking() {
