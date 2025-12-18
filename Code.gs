@@ -1,12 +1,10 @@
 /**
- * ER Shift Management System
+ * ER Shift Management System - Web App Version
  * 
  * Setup:
  * 1. Create a Google Sheet.
- * 2. Create a "Config" sheet with "Year", "Month", and "Calendar ID".
- * 3. Create a "Holidays" sheet with a list of update dates (YYYY-MM-DD).
- * 4. Create a "Doctors" sheet with "Name" (Col A) and "Email" (Col B).
- * 5. Tools > Script Editor > Paste this code.
+ * 2. Config Sheet: "Year", "Month", "Calendar ID".
+ * 3. Deploy as Web App: Include this script.
  */
 
 const CONFIG_SHEET_NAME = 'Config';
@@ -26,17 +24,131 @@ const SHIFTS_HOLIDAY = [
   { name: '휴일 야간', start: 18, end: 32 }
 ];
 
+// --- Web App Entry Point ---
+
+function doGet(e) {
+  return HtmlService.createTemplateFromFile('index')
+      .evaluate()
+      .setTitle('ER 근무 신청 시스템')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+// --- API Functions (Called from Client) ---
+
+/**
+ * Fetches shift events for the configured month.
+ */
+function getShiftData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const config = getConfig(ss);
+  
+  if (!config.calendarId) {
+    throw new Error('Calendar ID is not configured.');
+  }
+
+  const calendar = CalendarApp.getCalendarById(config.calendarId);
+  if (!calendar) {
+    throw new Error('Calendar not found. Check ID.');
+  }
+
+  const start = new Date(config.year, config.month - 1, 1);
+  const end = new Date(config.year, config.month, 0); // Last day of month
+  
+  // Expand range slightly to cover overnight shifts ending on 1st of next month
+  const fetchEnd = new Date(end);
+  fetchEnd.setDate(fetchEnd.getDate() + 1);
+
+  const events = calendar.getEvents(start, fetchEnd);
+  
+  const shifts = events.map(event => {
+    const title = event.getTitle();
+    const id = event.getId();
+    const startTime = event.getStartTime();
+    const endTime = event.getEndTime();
+    
+    let status = 'UNKNOWN';
+    let doctorName = '';
+    let shiftName = title;
+
+    if (title.startsWith('[모집]')) {
+      status = 'OPEN';
+      shiftName = title.replace('[모집] ', '');
+    } else if (title.startsWith('[확정]')) {
+      status = 'CONFIRMED';
+      // Format: [확정] DoctorName (ShiftName)
+      const match = title.match(/\[확정\]\s+(.+)\s+\((.+)\)/);
+      if (match) {
+        doctorName = match[1];
+        shiftName = match[2];
+      } else {
+        shiftName = title.replace('[확정] ', '');
+      }
+    }
+
+    return {
+      id: id,
+      title: title,
+      shiftName: shiftName,
+      start: startTime.toISOString(),
+      end: endTime.toISOString(),
+      status: status,
+      doctorName: doctorName
+    };
+  });
+  
+  // Return sorted by date
+  return {
+    year: config.year,
+    month: config.month,
+    shifts: shifts.sort((a, b) => new Date(a.start) - new Date(b.start))
+  };
+}
+
+/**
+ * Books a shift for a doctor.
+ */
+function bookShift(eventId, doctorName) {
+  if (!doctorName || doctorName.trim() === '') {
+    throw new Error('이름을 입력해주세요.');
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const config = getConfig(ss);
+  const calendar = CalendarApp.getCalendarById(config.calendarId);
+  const event = calendar.getEventById(eventId);
+  
+  if (!event) {
+    throw new Error('이벤트를 찾을 수 없습니다.');
+  }
+
+  const title = event.getTitle();
+  if (!title.startsWith('[모집]')) {
+    throw new Error('이미 마감되었거나 신청할 수 없는 슬롯입니다.');
+  }
+
+  const shiftName = title.replace('[모집] ', '');
+  
+  // Update Event
+  const newTitle = `[확정] ${doctorName} (${shiftName})`;
+  event.setTitle(newTitle);
+  event.setDescription(`Status: CONFIRMED\nDoctor: ${doctorName}\nUpdated via Web App`);
+  
+  // Log to Sheet
+  logShift(ss, event.getStartTime(), doctorName, newTitle);
+  
+  return { success: true, message: '신청이 완료되었습니다.' };
+}
+
+
+// --- Admin / Helper Functions ---
+
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('ER 근무 관리')
     .addItem('근무표 슬롯 생성', 'generateMonthlySlots')
-    .addItem('신청 내역 동기화', 'syncCalendarChanges')
     .addToUi();
 }
 
-/**
- * Generates empty shift slots for the specified month.
- */
 function generateMonthlySlots() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const configParams = getConfig(ss);
@@ -48,10 +160,10 @@ function generateMonthlySlots() {
 
   const calendar = CalendarApp.getCalendarById(configParams.calendarId);
   const year = configParams.year;
-  const month = configParams.month - 1; // JS Month is 0-indexed
+  const month = configParams.month - 1; 
   
   const startDate = new Date(year, month, 1);
-  const endDate = new Date(year, month + 1, 0); // Last day of month
+  const endDate = new Date(year, month + 1, 0); 
   
   const holidays = getHolidays(ss);
 
@@ -84,82 +196,8 @@ function createSlotEvent(calendar, date, shift) {
   
   calendar.createEvent(`[모집] ${shift.name}`, start, end, {
     description: `ShiftType: ${shift.name}\nStatus: OPEN`
-    // guests option removed to avoid invalid argument error
   });
 }
-
-/**
- * Triggered manually or by time trigger to sync changes
- */
-function syncCalendarChanges() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const configParams = getConfig(ss);
-  const calendar = CalendarApp.getCalendarById(configParams.calendarId);
-  const doctorMap = getDoctorMap(ss); // Cache doctor names
-  
-  // Check the whole month
-  const events = calendar.getEvents(
-    new Date(configParams.year, configParams.month - 1, 1),
-    new Date(configParams.year, configParams.month + 1, 0)
-  );
-
-  let updateCount = 0;
-
-  events.forEach(event => {
-    const title = event.getTitle();
-    const guests = event.getGuestList();
-    const realGuests = guests.filter(g => g.getEmail() !== calendar.getId());
-
-    // Case A: New Application ([모집] + Guest exists)
-    if (title.startsWith('[모집]') && realGuests.length > 0) {
-        // Someone applied!
-        const doctor = realGuests[0]; 
-        const doctorEmail = doctor.getEmail();
-        
-        // Normalize for robust matching (trim & lowercase)
-        const normalizedEmail = String(doctorEmail).trim().toLowerCase();
-        
-        Logger.log(`[Processing] Guest: ${doctorEmail} / Normalized: ${normalizedEmail}`);
-        
-        // Look up name
-        const doctorName = doctorMap[normalizedEmail] || doctor.getName() || doctorEmail.split('@')[0];
-        
-        // 1. Confirm Event
-        event.setTitle(`[확정] ${doctorName} (${title.replace('[모집] ', '')})`);
-        event.setDescription(event.getDescription().replace('Status: OPEN', 'Status: CONFIRMED'));
-        
-        // 2. Log to Sheet
-        logShift(ss, event.getStartTime(), doctorEmail, title);
-        
-        updateCount++;
-    }
-    
-    // Case B: Cancellation ([확정] + No Guests)
-    else if (title.startsWith('[확정]') && realGuests.length === 0) {
-        // Revert to OPEN
-        // Extract original shift name from "[확정] Name (ShiftName)"
-        // Regex looks for content inside the last parenthesis
-        const match = title.match(/\((.+)\)$/);
-        const originalShiftName = match ? match[1] : title; // Fallback if regex fails
-        
-        event.setTitle(`[모집] ${originalShiftName}`);
-        event.setDescription(event.getDescription().replace('Status: CONFIRMED', 'Status: OPEN'));
-        
-        // Optional: Log cancellation
-        logShift(ss, event.getStartTime(), 'CANCELED', `Reverted: ${title}`);
-        
-        updateCount++;
-    }
-  });
-  
-  if(updateCount > 0) {
-    SpreadsheetApp.getUi().alert(`${updateCount}건의 근무 신청이 확정되었습니다.\n로그를 확인하세요.`);
-  } else {
-    SpreadsheetApp.getUi().alert('새로운 신청 내역이 없습니다.');
-  }
-}
-
-// --- Helpers ---
 
 function getConfig(ss) {
   let sheet = ss.getSheetByName(CONFIG_SHEET_NAME);
@@ -173,24 +211,6 @@ function getConfig(ss) {
     month: sheet.getRange("B2").getValue(),
     calendarId: sheet.getRange("B3").getValue()
   };
-}
-
-function getDoctorMap(ss) {
-  const sheet = ss.getSheetByName(DOCTOR_SHEET_NAME);
-  const map = {};
-  if (!sheet) return map;
-  
-  const data = sheet.getDataRange().getValues();
-  // Assume Row 1 is header, start from Row 2
-  for (let i = 1; i < data.length; i++) {
-    const name = data[i][0]; // Col A
-    const email = data[i][1]; // Col B
-    if (email) {
-      const key = String(email).trim().toLowerCase();
-      map[key] = name;
-    }
-  }
-  return map;
 }
 
 function getHolidays(ss) {
@@ -209,11 +229,11 @@ function isWeekend(date) {
   return day === 0 || day === 6; // Sun or Sat
 }
 
-function logShift(ss, date, email, title) {
+function logShift(ss, date, nameOrEmail, title) {
   let sheet = ss.getSheetByName(MASTER_LOG_SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(MASTER_LOG_SHEET_NAME);
-    sheet.appendRow(['Shift Date', 'Doctor Email', 'Shift Title', 'Timestamp']);
+    sheet.appendRow(['Shift Date', 'Name', 'Shift Title', 'Timestamp']);
   }
-  sheet.appendRow([date, email, title, new Date()]);
+  sheet.appendRow([date, nameOrEmail, title, new Date()]);
 }
