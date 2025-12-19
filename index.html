@@ -3,10 +3,10 @@
 
 <head>
   <base target="_top">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     body {
-      font-family: 'Noto Sans KR', sans-serif;
+      /* System fonts for instant rendering - no external font loading */
+      font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif;
       margin: 0;
       padding: 20px;
       background-color: #f5f5f5;
@@ -59,10 +59,39 @@
       color: #777;
     }
 
-    .calendar-grid {
+    /* Skeleton loading animation */
+    .skeleton {
+      background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+      background-size: 200% 100%;
+      animation: loading 1.5s infinite;
+    }
+
+    @keyframes loading {
+      0% {
+        background-position: 200% 0;
+      }
+
+      100% {
+        background-position: -200% 0;
+      }
+    }
+
+    .skeleton-calendar {
       display: grid;
       grid-template-columns: repeat(7, 1fr);
       gap: 10px;
+      margin-top: 20px;
+    }
+
+    .skeleton-cell {
+      height: 100px;
+      border-radius: 4px;
+    }
+
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 0;
       margin-top: 20px;
     }
 
@@ -96,7 +125,7 @@
     .shift-btn {
       display: block;
       width: 100%;
-      margin: 3px 0;
+      margin: 0;
       padding: 4px;
       font-size: 0.8em;
       border: none;
@@ -105,6 +134,45 @@
       text-align: center;
       /* Center Alignment */
       color: white;
+    }
+
+    /* Height variations based on shift duration */
+    /* All shifts have same min-height (17px), padding adjusted for visual balance:
+       - 평일오전: 17px + 0px padding = 17px total
+       - 평일오후: 17px + 0px padding = 17px total
+       - 평일오전+오후 합계: 34px
+       - 휴일주간: 17px + 17px padding (8.5px top+bottom) = 34px total (matches 평일오전+오후)
+       - 평일야간: 17px + 17px padding (8.5px top+bottom) = 34px total
+       - 휴일야간: 17px + 17px padding (8.5px top+bottom) = 34px total
+       Total: 평일 68px, 휴일 68px
+    */
+    .shift-btn.height-short {
+      min-height: 17px;
+      padding: 0 4px;
+    }
+
+    .shift-btn.height-medium {
+      min-height: 17px;
+      padding: 8.5px 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .shift-btn.height-long {
+      min-height: 17px;
+      padding: 8.5px 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .shift-btn.height-night {
+      min-height: 17px;
+      padding: 8.5px 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .status-open {
@@ -217,7 +285,19 @@
       <h1 id="month-title">근무표 로딩 중...</h1>
       <button class="nav-btn" onclick="changeMonth(1)">&gt;</button>
     </div>
-    <div class="loading" id="loading">데이터를 불러오는 중입니다...</div>
+    <div class="loading" id="loading">
+      데이터를 불러오는 중입니다...
+      <!-- Skeleton Loading -->
+      <div class="skeleton-calendar" id="skeleton" style="margin-top: 20px;">
+        <div class="skeleton skeleton-cell"></div>
+        <div class="skeleton skeleton-cell"></div>
+        <div class="skeleton skeleton-cell"></div>
+        <div class="skeleton skeleton-cell"></div>
+        <div class="skeleton skeleton-cell"></div>
+        <div class="skeleton skeleton-cell"></div>
+        <div class="skeleton skeleton-cell"></div>
+      </div>
+    </div>
 
     <div class="calendar-grid" id="calendar" style="display:none;">
       <div class="day-header" style="color:red">일</div>
@@ -383,20 +463,37 @@
 
           btn.classList.add(groupClass);
 
+          // Add height class based on shift type
+          // height-short: 평일 오전/오후 (24px)
+          // height-medium: 휴일 주간 (32px - taller than weekday)
+          // height-long: 평일 야간 (50px)
+          // height-night: 휴일 야간 (42px - shorter than 평일야간)
+          if (shift.shiftName.includes('평일') && (shift.shiftName.includes('오전') || shift.shiftName.includes('오후'))) {
+            btn.classList.add('height-short');
+          } else if (shift.shiftName.includes('휴일') && shift.shiftName.includes('주간')) {
+            btn.classList.add('height-medium');
+          } else if (shift.shiftName.includes('평일') && shift.shiftName.includes('야간')) {
+            btn.classList.add('height-long');
+          } else if (shift.shiftName.includes('휴일') && shift.shiftName.includes('야간')) {
+            btn.classList.add('height-night');
+          }
+
           if (shift.status === 'OPEN') {
+            // Show FULL shift name for OPEN slots
             btn.textContent = shift.shiftName;
             btn.classList.add('status-open');
           } else {
-            // Shorten shift name for display: (평일 오전) -> (오전)
+            // Shorten shift name for CONFIRMED slots: (평일 오전) -> (오전)
             let shortName = shift.shiftName
               .replace('평일 ', '')
               .replace('휴일 ', '');
 
-            btn.textContent = `${shift.doctorName || '확정'} (${shortName})`;
+            btn.textContent = `${shift.doctorName || '확정'} ${shortName}`;
             btn.classList.add('status-confirmed');
           }
           // Always clickable
-          btn.onclick = () => openModal(shift.id, shift.shiftName, shift.status, shift.doctorName);
+          // Pass shift object with time info to modal
+          btn.onclick = () => openModal(shift.id, shift.shiftName, shift.status, shift.doctorName, shift.start, shift.end);
 
           dayCell.appendChild(btn);
         });
@@ -404,7 +501,7 @@
       }
     }
 
-    function openModal(eventId, shiftName, status, doctorName) {
+    function openModal(eventId, shiftName, status, doctorName, startTime, endTime) {
       currentEventId = eventId;
       const titleEl = document.getElementById('modal-shift-name');
       const inputEl = document.getElementById('doctorName');
@@ -423,12 +520,32 @@
       closeBtn.onclick = closeModal;
       btnGroup.appendChild(closeBtn);
 
-      titleEl.textContent = shiftName;
+      // Debug: Log the raw time values
+      console.log('=== DEBUG TIME VALUES ===');
+      console.log('startTime (raw):', startTime);
+      console.log('endTime (raw):', endTime);
+      console.log('shiftName:', shiftName);
+
+      // Format time display
+      const formatTime = (dateStr) => {
+        const date = new Date(dateStr);
+        console.log('formatTime input:', dateStr);
+        console.log('formatTime parsed date:', date);
+        console.log('formatTime hours:', date.getHours(), 'minutes:', date.getMinutes());
+        const h = String(date.getHours()).padStart(2, '0');
+        const m = String(date.getMinutes()).padStart(2, '0');
+        return `${h}:${m}`;
+      };
+      const timeRange = `${formatTime(startTime)}-${formatTime(endTime)}`;
+      console.log('Final timeRange:', timeRange);
+      console.log('========================');
+
+      titleEl.textContent = `${shiftName} (${timeRange})`;
       document.getElementById('bookingModal').style.display = 'flex';
 
       // STATE: CONFIRMED
       if (status === 'CONFIRMED') {
-        titleEl.innerHTML = `${shiftName}<br><small>현재: <b>${doctorName}</b></small>`;
+        titleEl.innerHTML = `${shiftName} (${timeRange})<br><small>현재: <b>${doctorName}</b></small>`;
 
         // Hide Inputs initially
         inputEl.style.display = 'none';
@@ -536,22 +653,14 @@
     function cancelBooking() {
       if (!confirm('정말 이 신청을 취소하시겠습니까?')) return;
 
-      const delBtn = document.getElementById('btn-delete');
-      delBtn.textContent = '취소중...';
-      delBtn.disabled = true;
-
       google.script.run
         .withSuccessHandler((res) => {
           alert(res.message);
           closeModal();
           loadData();
-          delBtn.textContent = '신청 취소';
-          delBtn.disabled = false;
         })
         .withFailureHandler((err) => {
           alert('오류: ' + err.message);
-          delBtn.textContent = '신청 취소';
-          delBtn.disabled = false;
         })
         .cancelShift(currentEventId);
     }
@@ -561,8 +670,8 @@
     }
   </script>
   <!-- Version Check -->
-  <div style="text-align: center; margin-top: 20px; color: #888; font-size: 0.8em;">
-    System Version: v2.4 (Edit Feature & Center Align)
+  <div style="text-align: center; margin-top: 20px; color: #888; font-size: 0.8em;" id="version-info">
+    System Version: v2.5 (Performance Optimized)
   </div>
   </div>
 

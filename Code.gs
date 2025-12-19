@@ -13,6 +13,9 @@ const MASTER_LOG_SHEET_NAME = 'Master_Log';
 const DOCTOR_SHEET_NAME = 'Doctors';
 const DEBUG_LOG_SHEET_NAME = 'Debug_Log';
 
+// Cache duration in seconds (10 minutes)
+const CACHE_DURATION = 600;
+
 // Shift Configurations
 // Default Shift Configurations (Used for initialization)
 const DEFAULT_SHIFTS_WEEKDAY = [
@@ -26,9 +29,17 @@ const DEFAULT_SHIFTS_HOLIDAY = [
   { name: '휴일 야간', start: '20:00', end: '08:00' }
 ];
 
-// Helper to parse "HH:mm" or number 8 -> {h: 8, m: 0}
+// Helper to parse "HH:mm" or number 8 or Date object -> {h: 8, m: 0}
 function parseTime(input) {
-  if (typeof input === 'number') return { h: input, m: 0 };
+  // Handle Date object (from spreadsheet cells formatted as time)
+  if (input instanceof Date) {
+    return { h: input.getHours(), m: input.getMinutes() };
+  }
+  // Handle number
+  if (typeof input === 'number') {
+    return { h: input, m: 0 };
+  }
+  // Handle string "HH:mm"
   if (typeof input === 'string') {
     const parts = input.split(':');
     return { 
@@ -128,8 +139,8 @@ function getShiftData(reqYear, reqMonth) {
       id: id,
       title: title,
       shiftName: shiftName,
-      start: startTime.toISOString(),
-      end: endTime.toISOString(),
+      start: Utilities.formatDate(startTime, ss.getSpreadsheetTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"),
+      end: Utilities.formatDate(endTime, ss.getSpreadsheetTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"),
       status: status,
       doctorName: doctorName
     };
@@ -332,24 +343,39 @@ function cancelShift(eventId) {
   }
 
   const title = event.getTitle();
-  if (!title.startsWith('[확정]')) {
+  const desc = event.getDescription() || '';
+  
+  // Check if event is CONFIRMED (new format uses Description)
+  if (!desc.includes('Status: CONFIRMED') && !title.startsWith('[확정]')) {
     throw new Error('취소할 수 없는 상태입니다.');
   }
 
-  // Parse original shift name from "[확정] DoctorName (ShiftName)"
-  // or fallback if regex fails
+  // Parse shift name and doctor name
+  // Current format: "DoctorName (ShiftName)" or Legacy: "[확정] DoctorName (ShiftName)"
   let shiftName = '';
-  const match = title.match(/\[확정\]\s+(.+)\s+\((.+)\)/);
+  let doctorName = '';
+  
+  // Try to get shift name from Description first (most reliable)
+  const typeMatch = desc.match(/ShiftType:\s+(.+?)(\n|$)/);
+  if (typeMatch) {
+    shiftName = typeMatch[1];
+  }
+  
+  // Parse doctor name from title
+  const cleanTitle = title.replace('[확정] ', '');
+  const match = cleanTitle.match(/^(.+)\s+\((.+)\)$/);
   if (match) {
-    shiftName = match[2];
-  } else {
-    // Fallback logic if format is different
+    doctorName = match[1];
+    if (!shiftName) shiftName = match[2]; // Fallback if not in description
+  }
+  
+  // If still no shift name, use title as fallback
+  if (!shiftName) {
     shiftName = title.replace('[확정] ', '');
   }
   
-  // Revert to Open status
-  const newTitle = `[모집] ${shiftName}`;
-  event.setTitle(newTitle);
+  // Revert to Open status - use shift name only (no prefix)
+  event.setTitle(shiftName);
   event.setDescription(`ShiftType: ${shiftName}\nStatus: OPEN\nCancelled by User`);
   
   // Optional: Log cancellation
@@ -358,20 +384,17 @@ function cancelShift(eventId) {
   // Send Cancellation Email
   try {
     let doctorEmail = '';
-    // Method 1: Try to look up email by Name from Doctors Sheet (Most reliable if configured)
-    const match = title.match(/\[확정\]\s+(.+)\s+\(/);
-    if (match) {
-        const docName = match[1];
+    
+    // Method 1: Try to look up email by Name from Doctors Sheet
+    if (doctorName) {
         const emails = getDoctorEmails(ss);
-        if (emails[docName]) {
-            doctorEmail = emails[docName];
+        if (emails[doctorName]) {
+            doctorEmail = emails[doctorName];
         }
     }
     
-    // Method 2: If not found, try generic guest list (unreliable if multiple guests)
+    // Method 2: If not found, try guest list
     if (!doctorEmail) {
-        // Fallback: This might be hard if we don't store it explicitly, 
-        // but often the user is the only guest added via this app.
         const guests = event.getGuestList();
         if (guests.length > 0) {
             doctorEmail = guests[0].getEmail();
@@ -419,6 +442,8 @@ function onOpen() {
   ui.createMenu('ER 근무 관리')
     .addItem('근무표 슬롯 생성', 'generateMonthlySlots')
     .addItem('근무표 슬롯 삭제 (초기화)', 'deleteMonthlySlots')
+    .addSeparator()
+    .addItem('캐시 삭제 (데이터 갱신)', 'clearCache')
     .addToUi();
 }
 
@@ -620,6 +645,19 @@ function getShiftConfig(ss) {
 
 function getHolidays(ss, year, month) {
   // Returns object: { 'YYYY-MM-DD': 'Holiday Name' }
+  const cacheKey = `holidays_${year}_${month}`;
+  const cache = CacheService.getScriptCache();
+  
+  // Try to get from cache first
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (e) {
+      console.error('Cache parse error: ' + e);
+    }
+  }
+  
   let holidays = {};
   
   // 1. Fetch from Google Holiday Calendar
@@ -663,6 +701,13 @@ function getHolidays(ss, year, month) {
     }
   }
   
+  // Cache the result
+  try {
+    cache.put(cacheKey, JSON.stringify(holidays), CACHE_DURATION);
+  } catch (e) {
+    console.error('Failed to cache holidays: ' + e);
+  }
+  
   return holidays;
 }
 
@@ -673,6 +718,19 @@ function isWeekend(date) {
 
 
 function getDoctorEmails(ss) {
+  const cacheKey = 'doctor_emails';
+  const cache = CacheService.getScriptCache();
+  
+  // Try to get from cache first
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (e) {
+      console.error('Cache parse error: ' + e);
+    }
+  }
+  
   let sheet = ss.getSheetByName(DOCTOR_SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(DOCTOR_SHEET_NAME);
@@ -692,6 +750,14 @@ function getDoctorEmails(ss) {
       map[name] = email;
     }
   });
+  
+  // Cache the result
+  try {
+    cache.put(cacheKey, JSON.stringify(map), CACHE_DURATION);
+  } catch (e) {
+    console.error('Failed to cache doctor emails: ' + e);
+  }
+  
   return map;
 }
 
@@ -712,6 +778,29 @@ function logToDebugSheet(message) {
     sheet.appendRow(['Timestamp', 'Message']);
   }
   sheet.appendRow([new Date(), message]);
+}
+
+// ===== CACHE MANAGEMENT =====
+/**
+ * Clears all cached data. Run this manually when you update:
+ * - Doctors sheet (email addresses)
+ * - Holidays sheet (holiday dates)
+ */
+function clearCache() {
+  const cache = CacheService.getScriptCache();
+  cache.removeAll(['doctor_emails']);
+  
+  // Clear holiday caches for current and nearby months
+  const now = new Date();
+  const year = now.getFullYear();
+  for (let month = 1; month <= 12; month++) {
+    cache.remove(`holidays_${year}_${month}`);
+    cache.remove(`holidays_${year-1}_${month}`);
+    cache.remove(`holidays_${year+1}_${month}`);
+  }
+  
+  Logger.log('Cache cleared successfully!');
+  SpreadsheetApp.getUi().alert('캐시가 성공적으로 삭제되었습니다.\n다음 로딩 시 최신 데이터가 반영됩니다.');
 }
 
 // ===== TEST FUNCTION - 이메일 발송 테스트용 =====
