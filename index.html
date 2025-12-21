@@ -327,22 +327,11 @@
 
   <script>
     let currentEventId = null;
-    let doctorEmailMap = {};
     let currentViewYear = null;
     let currentViewMonth = null;
 
     window.onload = function () {
       loadData();
-
-      // Auto-fill Logic
-      const nameInput = document.getElementById('doctorName');
-      nameInput.addEventListener('input', function () {
-        const name = this.value.trim();
-        const emailInput = document.getElementById('doctorEmail');
-        if (doctorEmailMap[name]) {
-          emailInput.value = doctorEmailMap[name];
-        }
-      });
     };
 
     function loadData(year, month) {
@@ -382,7 +371,6 @@
       // Store state
       currentViewYear = data.year;
       currentViewMonth = data.month;
-      doctorEmailMap = data.doctorEmails || {};
 
       // Set Title
       document.getElementById('month-title').textContent = `${data.year}년 ${data.month}월 응급실 근무표`;
@@ -422,19 +410,7 @@
         label.className = 'date-label';
         label.textContent = d;
 
-        // Append Holiday Name in Red
-        // dateStr is already defined above at line 300
-        if (data.holidays && data.holidays[dateStr]) { // Check holiday map
-          const holName = document.createElement('span');
-          holName.style.color = 'red';
-          holName.style.fontSize = '0.8em';
-          holName.style.marginLeft = '5px';
-          holName.textContent = data.holidays[dateStr];
-          label.appendChild(holName);
-
-          // Also mark cell as weekend/holiday style
-          dayCell.classList.add('weekend');
-        }
+        // Holiday display removed for performance (backend no longer provides holiday data)
 
         dayCell.appendChild(label);
 
@@ -671,7 +647,7 @@
   </script>
   <!-- Version Check -->
   <div style="text-align: center; margin-top: 20px; color: #888; font-size: 0.8em;" id="version-info">
-    System Version: v2.5 (Performance Optimized)
+    System Version: v3.2 (Extreme Speed - Minimal Data)
   </div>
   </div>
 

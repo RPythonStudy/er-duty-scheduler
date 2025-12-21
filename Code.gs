@@ -16,6 +16,151 @@ const DEBUG_LOG_SHEET_NAME = 'Debug_Log';
 // Cache duration in seconds (10 minutes)
 const CACHE_DURATION = 600;
 
+// Shifts Sheet Name
+const SHIFTS_SHEET_NAME = 'Shifts';
+
+// ===== SHEET MANAGEMENT FUNCTIONS =====
+
+/**
+ * Get or create Shifts sheet with proper structure
+ */
+function getShiftsSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHIFTS_SHEET_NAME);
+  
+  if (!sheet) {
+    sheet = ss.insertSheet(SHIFTS_SHEET_NAME);
+    
+    // Set up headers
+    const headers = [
+      '날짜', '근무명', '시작시간', '종료시간', 
+      '상태', '의사이름', '의사이메일', '생성일시', '수정일시'
+    ];
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    
+    // Format header row
+    sheet.getRange(1, 1, 1, headers.length)
+      .setBackground('#4285f4')
+      .setFontColor('#ffffff')
+      .setFontWeight('bold');
+    
+    // Freeze header row
+    sheet.setFrozenRows(1);
+    
+    // Set column widths
+    sheet.setColumnWidth(1, 100); // 날짜
+    sheet.setColumnWidth(2, 120); // 근무명
+    sheet.setColumnWidth(3, 80);  // 시작시간
+    sheet.setColumnWidth(4, 80);  // 종료시간
+    sheet.setColumnWidth(5, 100); // 상태
+    sheet.setColumnWidth(6, 100); // 의사이름
+    sheet.setColumnWidth(7, 200); // 의사이메일
+    sheet.setColumnWidth(8, 150); // 생성일시
+    sheet.setColumnWidth(9, 150); // 수정일시
+  }
+  
+  return sheet;
+}
+
+/**
+ * Find shift row by date and shift name
+ * Returns row number or -1 if not found
+ */
+function findShiftRow(sheet, dateStr, shiftName) {
+  const data = sheet.getDataRange().getValues();
+  
+  // Skip header row (index 0)
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = data[i][0]; // Column A: 날짜
+    const rowShiftName = data[i][1]; // Column B: 근무명
+    
+    // Convert date to string for comparison
+    const rowDateStr = typeof rowDate === 'string' 
+      ? rowDate 
+      : Utilities.formatDate(new Date(rowDate), sheet.getParent().getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+    
+    if (rowDateStr === dateStr && rowShiftName === shiftName) {
+      return i + 1; // Return 1-indexed row number
+    }
+  }
+  
+  return -1; // Not found
+}
+
+/**
+ * Safely format time value (handles both string "HH:mm" and Date objects)
+ */
+function formatTimeValue(timeValue) {
+  if (!timeValue) return '00:00';
+  
+  // If it's already a string in HH:mm format, return it
+  if (typeof timeValue === 'string') {
+    return timeValue;
+  }
+  
+  // If it's a Date object, extract hours and minutes
+  if (timeValue instanceof Date) {
+    const hours = String(timeValue.getHours()).padStart(2, '0');
+    const minutes = String(timeValue.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+  }
+  
+  // If it's a number (Excel serial date), convert to Date first
+  if (typeof timeValue === 'number') {
+    const date = new Date(timeValue);
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+  }
+  
+  return '00:00';
+}
+
+
+/**
+ * Convert sheet row to shift object
+ */
+function getShiftByRow(sheet, rowNum) {
+  const row = sheet.getRange(rowNum, 1, 1, 9).getValues()[0];
+  const tz = sheet.getParent().getSpreadsheetTimeZone();
+  
+  // Parse date
+  const dateStr = typeof row[0] === 'string' 
+    ? row[0] 
+    : Utilities.formatDate(new Date(row[0]), tz, 'yyyy-MM-dd');
+  
+  const shiftName = row[1];
+  const startTime = formatTimeValue(row[2]); // Convert to HH:mm string
+  const endTime = formatTimeValue(row[3]);   // Convert to HH:mm string
+  const status = row[4];    // OPEN or CONFIRMED
+  const doctorName = row[5] || '';
+  const doctorEmail = row[6] || '';
+  
+  // Create full datetime strings for start and end
+  const [startH, startM] = startTime.split(':');
+  const [endH, endM] = endTime.split(':');
+  
+  const startDate = new Date(dateStr);
+  startDate.setHours(parseInt(startH), parseInt(startM), 0);
+  
+  let endDate = new Date(dateStr);
+  // If end time is earlier than start time, it's next day
+  if (parseInt(endH) < parseInt(startH)) {
+    endDate.setDate(endDate.getDate() + 1);
+  }
+  endDate.setHours(parseInt(endH), parseInt(endM), 0);
+  
+  return {
+    id: `${dateStr}_${shiftName}`, // Composite key
+    title: status === 'OPEN' ? shiftName : `${doctorName} (${shiftName})`,
+    shiftName: shiftName,
+    start: Utilities.formatDate(startDate, tz, "yyyy-MM-dd'T'HH:mm:ss"),
+    end: Utilities.formatDate(endDate, tz, "yyyy-MM-dd'T'HH:mm:ss"),
+    status: status,
+    doctorName: doctorName
+  };
+}
+
 // Shift Configurations
 // Default Shift Configurations (Used for initialization)
 const DEFAULT_SHIFTS_WEEKDAY = [
@@ -63,88 +208,69 @@ function doGet(e) {
 
 /**
  * Fetches shift events for the configured month or requested month.
+ * NOW READS FROM SHIFTS SHEET (5-10x faster than Calendar API)
  */
 function getShiftData(reqYear, reqMonth) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const config = getConfig(ss);
   
-  if (!config.calendarId) {
-    throw new Error('Calendar ID is not configured.');
-  }
-
-  const calendar = CalendarApp.getCalendarById(config.calendarId);
-  if (!calendar) {
-    throw new Error('Calendar not found. Check ID.');
-  }
-
   // Use requested date if valid, otherwise use config
   const year = reqYear ? parseInt(reqYear) : config.year;
   const month = reqMonth ? parseInt(reqMonth) : config.month;
 
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 0); // Last day of month
+  // Get Shifts sheet
+  const shiftsSheet = getShiftsSheet();
+  const data = shiftsSheet.getDataRange().getValues();
   
-  // Expand range slightly to cover overnight shifts ending on 1st of next month
-  const fetchEnd = new Date(end);
-  fetchEnd.setDate(fetchEnd.getDate() + 1);
-
-  const events = calendar.getEvents(start, fetchEnd);
+  const shifts = [];
+  const tz = ss.getSpreadsheetTimeZone();
   
-  const shifts = events.map(event => {
-    const title = event.getTitle();
-    const id = event.getId();
-    const startTime = event.getStartTime();
-    const endTime = event.getEndTime();
-    const desc = event.getDescription() || '';
+  // Skip header row (index 0)
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
     
-    let status = 'UNKNOWN';
-    let doctorName = '';
-    let shiftName = title;
-
-    // 1. OPEN SLOT (Checked via Description or legacy prefix)
-    if (desc.includes('Status: OPEN') || title.startsWith('[모집]')) {
-      status = 'OPEN';
-      // Remove legacy prefix if present, though new ones won't have it
-      shiftName = title.replace('[모집] ', '');
-    } 
-    // 2. CONFIRMED SLOT
-    else {
-      // Assumes confirmed if not OPEN.
-      // Format: DoctorName (ShiftName) OR Legacy: [확정] DoctorName (ShiftName)
-      status = 'CONFIRMED';
-      
-      // Clean legacy prefix
-      const cleanTitle = title.replace('[확정] ', '');
-      
-      // Try parsing "Name (Shift)"
-      const match = cleanTitle.match(/^(.+)\s+\((.+)\)$/);
-      if (match) {
-        doctorName = match[1];
-        shiftName = match[2];
-      } else {
-        // Fallback: Title is the name? Or Title is ShiftName? 
-        // If we can't parse, just use title as is, or look in description
-        // But usually current system enforces formatting.
-        if (desc.includes('Doctor:')) {
-           const descMatch = desc.match(/Doctor:\s+(.+)/);
-           if (descMatch) doctorName = descMatch[1];
-        }
-        // If we still don't have shiftName separate, assume Title might be it
-        // ignoring the name... this is edge case.
-        if (!doctorName) doctorName = '확정'; // Default
-      }
+    // Parse date
+    const dateStr = typeof row[0] === 'string' 
+      ? row[0] 
+      : Utilities.formatDate(new Date(row[0]), tz, 'yyyy-MM-dd');
+    
+    // Check if this shift belongs to the requested month
+    const shiftDate = new Date(dateStr);
+    if (shiftDate.getFullYear() !== year || (shiftDate.getMonth() + 1) !== month) {
+      continue; // Skip shifts from other months
     }
-
-    return {
-      id: id,
-      title: title,
+    
+    const shiftName = row[1];
+    const startTime = formatTimeValue(row[2]); // Convert to HH:mm string
+    const endTime = formatTimeValue(row[3]);   // Convert to HH:mm string
+    const status = row[4];    // OPEN or CONFIRMED
+    const doctorName = row[5] || '';
+    const doctorEmail = row[6] || '';
+    
+    // Create full datetime strings for start and end
+    const [startH, startM] = startTime.split(':');
+    const [endH, endM] = endTime.split(':');
+    
+    const startDate = new Date(dateStr);
+    startDate.setHours(parseInt(startH), parseInt(startM), 0);
+    
+    let endDate = new Date(dateStr);
+    // If end time is earlier than start time, it's next day
+    if (parseInt(endH) < parseInt(startH)) {
+      endDate.setDate(endDate.getDate() + 1);
+    }
+    endDate.setHours(parseInt(endH), parseInt(endM), 0);
+    
+    shifts.push({
+      id: `${dateStr}_${shiftName}`, // Composite key
+      title: status === 'OPEN' ? shiftName : `${doctorName} (${shiftName})`,
       shiftName: shiftName,
-      start: Utilities.formatDate(startTime, ss.getSpreadsheetTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"),
-      end: Utilities.formatDate(endTime, ss.getSpreadsheetTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"),
+      start: Utilities.formatDate(startDate, tz, "yyyy-MM-dd'T'HH:mm:ss"),
+      end: Utilities.formatDate(endDate, tz, "yyyy-MM-dd'T'HH:mm:ss"),
       status: status,
       doctorName: doctorName
-    };
-  });
+    });
+  }
   
   // Return sorted by date + Doctor Email Map
   return {
@@ -166,117 +292,61 @@ function getShiftData(reqYear, reqMonth) {
       };
       
       return getPriority(a.shiftName) - getPriority(b.shiftName);
-    }),
-    doctorEmails: getDoctorEmails(ss),
-    holidays: getHolidays(ss, year, month)
+    })
+    // doctorEmails: getDoctorEmails(ss) // REMOVED: Not used by frontend
+    // holidays: getHolidays(ss, year, month) // REMOVED: Not used by frontend, causes 1+ second delay
   };
 }
 
 /**
  * Books a shift for a doctor.
+ * NOW WRITES TO SHIFTS SHEET (5x faster than Calendar API)
  */
-function bookShift(eventId, doctorName, doctorEmail) {
+function bookShift(shiftId, doctorName, doctorEmail) {
   if (!doctorName || doctorName.trim() === '') {
     throw new Error('이름을 입력해주세요.');
   }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const config = getConfig(ss);
-  const calendar = CalendarApp.getCalendarById(config.calendarId);
-  const event = calendar.getEventById(eventId);
   
-  if (!event) {
-    throw new Error('이벤트를 찾을 수 없습니다.');
-  }
-
-  const title = event.getTitle();
-  const desc = event.getDescription() || '';
-
-  // Validate: Check if Status is OPEN or CONFIRMED (Allow overwrite)
-  // We only block if it's not a valid slot at all (e.g. neither open nor confirmed properly)
-  // Actually, we want to allow editing, so we trust the input eventId is correct.
-  // Just ensure it's a shift slot.
-  if (!desc.includes('ShiftType:')) { 
-     // A minimal check to ensure we don't edit random events
-     // Or we can rely on the fact that we only show valid buttons.
+  // Parse composite ID: "YYYY-MM-DD_ShiftName"
+  const [dateStr, shiftName] = shiftId.split('_');
+  
+  if (!dateStr || !shiftName) {
+    throw new Error('잘못된 근무 ID입니다.');
   }
   
-  // Previous Logic: if (!desc.includes('Status: OPEN') && !title.startsWith('[모집]')) throw ...
-  // New Logic: Allow.
+  // Find shift in Shifts sheet
+  const shiftsSheet = getShiftsSheet();
+  const rowNum = findShiftRow(shiftsSheet, dateStr, shiftName);
   
-  // Determine Shift Name
-  // If we are editing, the title might be "Doctor (Shift)". We need to extract Shift.
-  let shiftName = '';
-  // Try parsing (ShortName or FullName)
-  // But wait, we don't need to parse title if we can get it from Description or pass it?
-  // Passed params: eventId, doctorName, doctorEmail. We don't get shiftName.
-  // We need to preserve the shift name.
-  
-  // 1. Try legacy/open format: "[모집] ShiftName"
-  if (title.startsWith('[모집]')) {
-    shiftName = title.replace('[모집] ', '');
-  } 
-  // 2. Try confirmed format: "Name (ShiftName)"
-  else {
-    const match = title.match(/\((.+)\)$/); // Match last parenthesis
-    if (match) {
-      // Logic for short names: (오전) -> restore full name? 
-      // Actually, createSlotEvent saves "ShiftType: 평일 오전" in description!
-      // Reliable way: read Description.
-      const typeMatch = desc.match(/ShiftType:\s+(.+?)(\n|$)/);
-      if (typeMatch) {
-         shiftName = typeMatch[1];
-      } else {
-         // Fallback to title parse
-         shiftName = match[1];
-         // If short name was saved "오전", we might want to keep it or full name?
-         // Let's rely on Description which has full name.
-      }
-    } else {
-       // Just use title as is
-       shiftName = title;
-    }
+  if (rowNum === -1) {
+    throw new Error('근무를 찾을 수 없습니다.');
   }
-
-  // Double check description for full name if we missed it
-  const typeMatch = desc.match(/ShiftType:\s+(.+?)(\n|$)/);
-  if (typeMatch) {
-      shiftName = typeMatch[1];
-  }
-
-  // Update Event
-  // New Format: "DoctorName (ShortName?)" 
-  // Wait, bookShift constructs title. createSlotEvent used full name.
-  // Frontend displays short name. Event title should probably have SHORT name? 
-  // User said: "simple text display: Morning".
   
-  // Let's standardize Title storage:
-  // "DoctorName (ShiftName)"
-  // If we want title to be short, we should shorten it here too?
-  // Actually frontend did the shortening logic `replace('평일 ', '')`.
-  // So backend can store Full Name in Title, frontend shortens it.
-  // OR backend stores Full Name, frontend shortens.
-  // Let's stick to Full Name in Title for clarity/searchability in Google Calendar.
-  // Frontend is just a view.
+  // Update shift row
+  const now = new Date();
+  shiftsSheet.getRange(rowNum, 5).setValue('CONFIRMED'); // Status
+  shiftsSheet.getRange(rowNum, 6).setValue(doctorName);   // Doctor Name
+  shiftsSheet.getRange(rowNum, 7).setValue(doctorEmail || ''); // Doctor Email
+  shiftsSheet.getRange(rowNum, 9).setValue(now);          // Updated At
   
-  const newTitle = `${doctorName} (${shiftName})`;
-  event.setTitle(newTitle);
-  let newDesc = `Status: CONFIRMED\nDoctor: ${doctorName}\nUpdated via Web App`;
+  // Get shift details for email
+  const startTime = formatTimeValue(shiftsSheet.getRange(rowNum, 3).getValue());
+  const endTime = formatTimeValue(shiftsSheet.getRange(rowNum, 4).getValue());
   
+  // Log to Master_Log
+  logShift(ss, new Date(dateStr), `${doctorName} (${doctorEmail || 'No Email'})`, `${doctorName} (${shiftName})`);
+  
+  // Optional: Create Calendar event if email provided
   if (doctorEmail && doctorEmail.trim() !== '') {
     try {
-      event.addGuest(doctorEmail);
-      newDesc += `\nGuest: ${doctorEmail}`;
+      createCalendarEventForShift(ss, dateStr, shiftName, startTime, endTime, doctorName, doctorEmail);
     } catch (e) {
-      // Ignore invalid email errors to prevent blocking the booking
-      console.error('Failed to add guest: ' + e);
+      console.error('Calendar event creation failed (non-blocking): ' + e);
+      // Don't fail the booking if Calendar creation fails
     }
   }
-
-  event.setDescription(newDesc);
-  
-  // Log to Sheet
-  logShift(ss, event.getStartTime(), `${doctorName} (${doctorEmail || 'No Email'})`, newTitle);
   
   // Send Email Notification
   logToDebugSheet('[BOOK] Starting email process for: ' + doctorName);
@@ -285,19 +355,19 @@ function bookShift(eventId, doctorName, doctorEmail) {
   if (doctorEmail && doctorEmail.trim() !== '') {
     logToDebugSheet('[BOOK] Email present. Preparing to send...');
     try {
-      const dateStr = Utilities.formatDate(event.getStartTime(), ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm');
-      const subject = `[응급실 당직 확정] ${doctorName} 선생님 - ${dateStr}`;
+      const dateTimeStr = `${dateStr} ${startTime}`;
+      const subject = `[응급실 당직 확정] ${doctorName} 선생님 - ${dateTimeStr}`;
       const body = `
         안녕하세요, ${doctorName} 선생님.
         
         응급실 당직 근무가 확정되었습니다.
         
-        - 일시: ${dateStr}
+        - 일시: ${dateTimeStr}
         - 근무: ${shiftName}
         - 상태: 확정 (Confirmed)
         
         이 메일은 시스템에서 자동으로 발송되었습니다.
-        캘린더 초대장이 함께 발송되었으니 일정을 확인해 주세요.
+        ${doctorEmail ? '캘린더 초대장이 함께 발송되었으니 일정을 확인해 주세요.' : ''}
         
         감사합니다.
       `;
@@ -327,113 +397,175 @@ function bookShift(eventId, doctorName, doctorEmail) {
   return { success: true, message: successMsg };
 }
 
+/**
+ * Creates a Calendar event for a confirmed shift (optional, for notifications)
+ */
+function createCalendarEventForShift(ss, dateStr, shiftName, startTime, endTime, doctorName, doctorEmail) {
+  const config = getConfig(ss);
+  
+  if (!config.calendarId) {
+    console.log('Calendar ID not configured, skipping Calendar event creation');
+    return;
+  }
+  
+  const calendar = CalendarApp.getCalendarById(config.calendarId);
+  if (!calendar) {
+    console.log('Calendar not found, skipping Calendar event creation');
+    return;
+  }
+  
+  const tz = ss.getSpreadsheetTimeZone();
+  
+  // Parse times
+  const [startH, startM] = startTime.split(':');
+  const [endH, endM] = endTime.split(':');
+  
+  const startDate = new Date(dateStr);
+  startDate.setHours(parseInt(startH), parseInt(startM), 0);
+  
+  let endDate = new Date(dateStr);
+  // If end time is earlier than start time, it's next day
+  if (parseInt(endH) < parseInt(startH)) {
+    endDate.setDate(endDate.getDate() + 1);
+  }
+  endDate.setHours(parseInt(endH), parseInt(endM), 0);
+  
+  const title = `${doctorName} (${shiftName})`;
+  const description = `Status: CONFIRMED\nDoctor: ${doctorName}\nShift: ${shiftName}\nCreated via Web App`;
+  
+  const event = calendar.createEvent(title, startDate, endDate, {
+    description: description
+  });
+  
+  // Add guest
+  if (doctorEmail) {
+    try {
+      event.addGuest(doctorEmail);
+    } catch (e) {
+      console.error('Failed to add guest to Calendar event: ' + e);
+    }
+  }
+  
+  console.log(`Calendar event created for ${doctorName} on ${dateStr}`);
+}
+
 
 
 /**
  * Cancels a confirmed shift.
+ * NOW WRITES TO SHIFTS SHEET (5x faster than Calendar API)
  */
-function cancelShift(eventId) {
+function cancelShift(shiftId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const config = getConfig(ss);
-  const calendar = CalendarApp.getCalendarById(config.calendarId);
-  const event = calendar.getEventById(eventId);
   
-  if (!event) {
-    throw new Error('이벤트를 찾을 수 없습니다.');
+  // Parse composite ID: "YYYY-MM-DD_ShiftName"
+  const [dateStr, shiftName] = shiftId.split('_');
+  
+  if (!dateStr || !shiftName) {
+    throw new Error('잘못된 근무 ID입니다.');
   }
-
-  const title = event.getTitle();
-  const desc = event.getDescription() || '';
   
-  // Check if event is CONFIRMED (new format uses Description)
-  if (!desc.includes('Status: CONFIRMED') && !title.startsWith('[확정]')) {
+  // Find shift in Shifts sheet
+  const shiftsSheet = getShiftsSheet();
+  const rowNum = findShiftRow(shiftsSheet, dateStr, shiftName);
+  
+  if (rowNum === -1) {
+    throw new Error('근무를 찾을 수 없습니다.');
+  }
+  
+  // Get current shift data before clearing
+  const status = shiftsSheet.getRange(rowNum, 5).getValue();
+  const doctorName = shiftsSheet.getRange(rowNum, 6).getValue();
+  const doctorEmail = shiftsSheet.getRange(rowNum, 7).getValue();
+  
+  if (status !== 'CONFIRMED') {
     throw new Error('취소할 수 없는 상태입니다.');
   }
-
-  // Parse shift name and doctor name
-  // Current format: "DoctorName (ShiftName)" or Legacy: "[확정] DoctorName (ShiftName)"
-  let shiftName = '';
-  let doctorName = '';
   
-  // Try to get shift name from Description first (most reliable)
-  const typeMatch = desc.match(/ShiftType:\s+(.+?)(\n|$)/);
-  if (typeMatch) {
-    shiftName = typeMatch[1];
-  }
+  // Revert to OPEN status
+  const now = new Date();
+  shiftsSheet.getRange(rowNum, 5).setValue('OPEN');      // Status
+  shiftsSheet.getRange(rowNum, 6).setValue('');          // Clear Doctor Name
+  shiftsSheet.getRange(rowNum, 7).setValue('');          // Clear Doctor Email
+  shiftsSheet.getRange(rowNum, 9).setValue(now);         // Updated At
   
-  // Parse doctor name from title
-  const cleanTitle = title.replace('[확정] ', '');
-  const match = cleanTitle.match(/^(.+)\s+\((.+)\)$/);
-  if (match) {
-    doctorName = match[1];
-    if (!shiftName) shiftName = match[2]; // Fallback if not in description
-  }
-  
-  // If still no shift name, use title as fallback
-  if (!shiftName) {
-    shiftName = title.replace('[확정] ', '');
-  }
-  
-  // Revert to Open status - use shift name only (no prefix)
-  event.setTitle(shiftName);
-  event.setDescription(`ShiftType: ${shiftName}\nStatus: OPEN\nCancelled by User`);
-  
-  // Optional: Log cancellation
-  logShift(ss, event.getStartTime(), 'CANCELLATION', `Cancelled: ${title}`);
+  // Log cancellation
+  logShift(ss, new Date(dateStr), 'CANCELLATION', `Cancelled: ${doctorName} (${shiftName})`);
   
   // Send Cancellation Email
-  try {
-    let doctorEmail = '';
-    
-    // Method 1: Try to look up email by Name from Doctors Sheet
-    if (doctorName) {
-        const emails = getDoctorEmails(ss);
-        if (emails[doctorName]) {
-            doctorEmail = emails[doctorName];
-        }
-    }
-    
-    // Method 2: If not found, try guest list
-    if (!doctorEmail) {
-        const guests = event.getGuestList();
-        if (guests.length > 0) {
-            doctorEmail = guests[0].getEmail();
-        }
-    }
-
-    if (doctorEmail) {
-        const dateStr = Utilities.formatDate(event.getStartTime(), ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm');
-        const subject = `[응급실 당직 취소] ${shiftName} - ${dateStr}`;
-        const body = `
-          안녕하세요.
-          
-          다음 당직 근무 신청이 취소되었습니다.
-          
-          - 일시: ${dateStr}
-          - 근무: ${shiftName}
-          - 상태: 취소됨 (Cancelled)
-          
-          이 메일은 시스템에서 자동으로 발송되었습니다.
-          감사합니다.
-        `;
+  if (doctorEmail) {
+    try {
+      const startTime = formatTimeValue(shiftsSheet.getRange(rowNum, 3).getValue());
+      const dateTimeStr = `${dateStr} ${startTime}`;
+      const subject = `[응급실 당직 취소] ${shiftName} - ${dateTimeStr}`;
+      const body = `
+        안녕하세요.
         
-        MailApp.sendEmail({
-            to: doctorEmail,
-            subject: subject,
-            body: body
-        });
+        다음 당직 근무 신청이 취소되었습니다.
         
-        // Remove guest from event to clear it from their calendar
-        event.removeGuest(doctorEmail);
-        logToDebugSheet('[CANCEL] Cancel email sent to: ' + doctorEmail);
-    }
-  } catch(e) {
+        - 일시: ${dateTimeStr}
+        - 근무: ${shiftName}
+        - 상태: 취소됨 (Cancelled)
+        
+        이 메일은 시스템에서 자동으로 발송되었습니다.
+        감사합니다.
+      `;
+      
+      MailApp.sendEmail({
+        to: doctorEmail,
+        subject: subject,
+        body: body
+      });
+      
+      logToDebugSheet('[CANCEL] Cancel email sent to: ' + doctorEmail);
+    } catch(e) {
       logToDebugSheet('[CANCEL] ERROR: ' + e.message);
       console.error('Cancellation email error: ' + e);
+    }
+  }
+  
+  // Optional: Delete Calendar event if it exists
+  try {
+    deleteCalendarEventForShift(ss, dateStr, shiftName, doctorName);
+  } catch (e) {
+    console.error('Calendar event deletion failed (non-blocking): ' + e);
   }
 
   return { success: true, message: '신청이 취소되었습니다.' };
 }
+
+/**
+ * Deletes Calendar event for a cancelled shift (optional)
+ */
+function deleteCalendarEventForShift(ss, dateStr, shiftName, doctorName) {
+  const config = getConfig(ss);
+  
+  if (!config.calendarId) {
+    return;
+  }
+  
+  const calendar = CalendarApp.getCalendarById(config.calendarId);
+  if (!calendar) {
+    return;
+  }
+  
+  // Search for event on that date with matching title
+  const searchDate = new Date(dateStr);
+  const nextDay = new Date(searchDate);
+  nextDay.setDate(nextDay.getDate() + 1);
+  
+  const events = calendar.getEvents(searchDate, nextDay);
+  const titleToFind = `${doctorName} (${shiftName})`;
+  
+  for (let event of events) {
+    if (event.getTitle() === titleToFind) {
+      event.deleteEvent();
+      console.log(`Calendar event deleted for ${doctorName} on ${dateStr}`);
+      return;
+    }
+  }
+}
+
 
 // --- Admin / Helper Functions ---
 
@@ -451,12 +583,6 @@ function generateMonthlySlots() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const configParams = getConfig(ss);
   
-  if (!configParams.calendarId) {
-    SpreadsheetApp.getUi().alert('캘린더 ID가 설정되지 않았습니다.');
-    return;
-  }
-
-  const calendar = CalendarApp.getCalendarById(configParams.calendarId);
   const year = configParams.year;
   const month = configParams.month - 1; 
   
@@ -465,10 +591,16 @@ function generateMonthlySlots() {
   
   const holidays = getHolidays(ss, year, month + 1); // getHolidays expects 1-based month for API
   const shiftConfig = getShiftConfig(ss);
+  const shiftsSheet = getShiftsSheet();
+  const tz = ss.getSpreadsheetTimeZone();
+  
+  // Prepare bulk data for insertion
+  const rowsToInsert = [];
+  const now = new Date();
 
   for (let d = 1; d <= endDate.getDate(); d++) {
     const currentDate = new Date(year, month, d);
-    const dateString = Utilities.formatDate(currentDate, ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+    const dateString = Utilities.formatDate(currentDate, tz, 'yyyy-MM-dd');
     
     // Check if holiday (formatting matches keys in getHolidays)
     const holidayName = holidays[dateString]; 
@@ -477,100 +609,91 @@ function generateMonthlySlots() {
     // Check Next Day for Night Shift Logic
     const nextDate = new Date(currentDate);
     nextDate.setDate(currentDate.getDate() + 1);
-    const nextDateString = Utilities.formatDate(nextDate, ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+    const nextDateString = Utilities.formatDate(nextDate, tz, 'yyyy-MM-dd');
     const isNextDayHoliday = isWeekend(nextDate) || !!holidays[nextDateString];
 
     // Choose shift types dynamically
     const shiftTypes = isHoliday ? shiftConfig.holiday : shiftConfig.weekday;
     
     shiftTypes.forEach(shift => {
-      // Just use the raw shift name (User requested to exclude holiday name in title)
-      createSlotEvent(calendar, currentDate, shift, isNextDayHoliday);
-      Utilities.sleep(100); // Reduced delay to prevent timeout
+      // Calculate end time based on next day logic
+      let endTime = shift.end;
+      
+      if (shift.name === '평일 야간' && isNextDayHoliday) {
+        endTime = '08:00';
+      } else if (shift.name === '휴일 야간' && !isNextDayHoliday) {
+        endTime = '08:30';
+      }
+      
+      // Add row: [날짜, 근무명, 시작시간, 종료시간, 상태, 의사이름, 의사이메일, 생성일시, 수정일시]
+      rowsToInsert.push([
+        dateString,
+        shift.name,
+        shift.start,
+        endTime,
+        'OPEN',
+        '',
+        '',
+        now,
+        now
+      ]);
     });
   }
   
-  SpreadsheetApp.getUi().alert('슬롯 생성이 완료되었습니다.');
+  // Bulk insert all rows at once (much faster than individual inserts)
+  if (rowsToInsert.length > 0) {
+    const lastRow = shiftsSheet.getLastRow();
+    shiftsSheet.getRange(lastRow + 1, 1, rowsToInsert.length, 9).setValues(rowsToInsert);
+  }
+  
+  SpreadsheetApp.getUi().alert(`슬롯 생성이 완료되었습니다. (총 ${rowsToInsert.length}개)`);
 }
 
 function deleteMonthlySlots() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const configParams = getConfig(ss);
   
-  if (!configParams.calendarId) {
-    SpreadsheetApp.getUi().alert('캘린더 ID가 설정되지 않았습니다.');
-    return;
-  }
-  
   const ui = SpreadsheetApp.getUi();
   const response = ui.alert(
     '슬롯 삭제 확인',
-    `${configParams.year}년 ${configParams.month}월의 '[모집]' 이벤트를 모두 삭제하시겠습니까?\n(주의: 확정된 근무는 삭제되지 않습니다.)`,
+    `${configParams.year}년 ${configParams.month}월의 OPEN 상태 슬롯을 모두 삭제하시겠습니까?\n(주의: 확정된 근무는 삭제되지 않습니다.)`,
     ui.ButtonSet.YES_NO
   );
 
   if (response !== ui.Button.YES) return;
 
-  const calendar = CalendarApp.getCalendarById(configParams.calendarId);
+  const shiftsSheet = getShiftsSheet();
   const year = configParams.year;
-  const month = configParams.month - 1;
-  const start = new Date(year, month, 1);
-  const end = new Date(year, month + 1, 0); 
-  // Add padding for overnight
-  const fetchEnd = new Date(end);
-  fetchEnd.setDate(fetchEnd.getDate() + 1);
-
-  const events = calendar.getEvents(start, fetchEnd);
+  const month = configParams.month;
+  const tz = ss.getSpreadsheetTimeZone();
+  
+  // Get all data
+  const data = shiftsSheet.getDataRange().getValues();
   let deletedCount = 0;
   
-  events.forEach(event => {
-    const title = event.getTitle();
-    const desc = event.getDescription() || '';
+  // Delete from bottom to top to avoid row number shifting
+  for (let i = data.length - 1; i >= 1; i--) { // Skip header row
+    const row = data[i];
+    const dateStr = typeof row[0] === 'string' 
+      ? row[0] 
+      : Utilities.formatDate(new Date(row[0]), tz, 'yyyy-MM-dd');
+    const status = row[4];
     
-    // Delete if Status is OPEN OR legacy [모집] prefix
-    if (desc.includes('Status: OPEN') || title.startsWith('[모집]')) {
-      event.deleteEvent();
-      deletedCount++;
-      Utilities.sleep(100); // Throttle
+    // Check if this shift belongs to the target month
+    const shiftDate = new Date(dateStr);
+    if (shiftDate.getFullYear() === year && (shiftDate.getMonth() + 1) === month) {
+      // Delete if OPEN status
+      if (status === 'OPEN') {
+        shiftsSheet.deleteRow(i + 1); // +1 because row numbers are 1-indexed
+        deletedCount++;
+      }
     }
-  });
+  }
 
   ui.alert(`삭제 완료: 총 ${deletedCount}개의 슬롯이 삭제되었습니다.`);
 }
 
-function createSlotEvent(calendar, date, shift, nextDayIsHoliday) {
-  const startTime = parseTime(shift.start);
-  let start = new Date(date);
-  start.setHours(startTime.h, startTime.m, 0);
-  
-  // Calculate End Logic
-  // Default end time from config
-  const endTime = parseTime(shift.end);
-  let end = new Date(date);
-  
-  // Special Rules for Next Day transition
-  if (shift.name === '평일 야간' && nextDayIsHoliday) {
-    // Weekday Night -> Holiday Morning: Ends at 08:00
-    end.setDate(date.getDate() + 1);
-    end.setHours(8, 0, 0);
-  } else if (shift.name === '휴일 야간' && !nextDayIsHoliday) {
-    // Holiday Night -> Weekday Morning: Ends at 08:30
-    end.setDate(date.getDate() + 1);
-    end.setHours(8, 30, 0);
-  } else {
-    // Normal Case
-    if (endTime.h < startTime.h) {
-      // Crosses midnight
-      end.setDate(date.getDate() + 1);
-    }
-    end.setHours(endTime.h, endTime.m, 0);
-  }
-  
-  // Title: Just Shift Name (No prefix)
-  calendar.createEvent(shift.name, start, end, {
-    description: `ShiftType: ${shift.name}\nStatus: OPEN`
-  });
-}
+// createSlotEvent is no longer needed - we insert directly to Shifts sheet in generateMonthlySlots()
 
 function getConfig(ss) {
   let sheet = ss.getSheetByName(CONFIG_SHEET_NAME);

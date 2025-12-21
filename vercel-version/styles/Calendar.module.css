@@ -1,7 +1,7 @@
-/* Calendar.module.css - 스타일 */
+/* Calendar.module.css - 응급실 근무 신청 시스템 스타일 */
 
 .container {
-  max-width: 800px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 20px;
   background: white;
@@ -21,7 +21,7 @@
 .headerNav h1 {
   margin: 0;
   color: #333;
-  font-size: 1.5em;
+  font-size: 1.8em;
 }
 
 .navBtn {
@@ -45,51 +45,212 @@
 .calendarGrid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 5px;
+  gap: 8px;
 }
 
 .dayHeader {
   text-align: center;
   font-weight: bold;
-  padding: 10px 0;
-  background-color: #eee;
+  padding: 12px 0;
+  background-color: #f5f5f5;
   border-radius: 4px;
+  font-size: 1em;
 }
 
 .sunday {
-  color: red;
+  color: #e74c3c;
 }
 
 .saturday {
-  color: blue;
+  color: #3498db;
 }
 
 .dayCell {
-  min-height: 80px;
+  min-height: 150px;
   border: 1px solid #ddd;
-  border-radius: 4px;
-  padding: 5px;
+  border-radius: 6px;
+  padding: 8px;
   background: white;
+  display: flex;
+  flex-direction: column;
 }
 
-.weekend {
-  background-color: #fff0f0;
+.holiday {
+  background-color: #fff5f5;
+}
+
+.dateHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #eee;
 }
 
 .dateLabel {
   font-weight: bold;
+  font-size: 1em;
+  color: #333;
+}
+
+.holidayLabel {
+  font-size: 0.7em;
+  color: #e74c3c;
+  font-weight: normal;
+}
+
+.shiftsContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.shiftSlot {
+  padding: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85em;
+  transition: all 0.2s;
+}
+
+.open {
+  background-color: #e8f5e9;
+  border: 1px solid #4caf50;
+}
+
+.open:hover {
+  background-color: #c8e6c9;
+  transform: scale(1.02);
+}
+
+.confirmed {
+  background-color: #e3f2fd;
+  border: 1px solid #2196f3;
+}
+
+.shiftName {
+  font-weight: bold;
+  margin-bottom: 2px;
   font-size: 0.9em;
-  display: block;
-  margin-bottom: 5px;
+}
+
+.shiftInfo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.doctorName {
+  color: #1976d2;
+  font-weight: 500;
+}
+
+.openLabel {
+  color: #4caf50;
+  font-size: 0.8em;
+}
+
+.cancelBtn {
+  background-color: #f44336;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 0.75em;
+  cursor: pointer;
+}
+
+.cancelBtn:hover {
+  background-color: #d32f2f;
 }
 
 .emptyCell {
-  min-height: 80px;
+  min-height: 150px;
+}
+
+/* Modal Styles */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modalContent {
+  background: white;
+  padding: 30px;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  min-width: 400px;
+}
+
+.modalContent h2 {
+  margin-top: 0;
+  color: #333;
+}
+
+.modalContent p {
+  margin: 10px 0;
+  color: #555;
+}
+
+.input {
+  width: 100%;
+  padding: 10px;
+  margin: 10px 0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1em;
+  box-sizing: border-box;
+}
+
+.modalButtons {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.confirmBtn {
+  flex: 1;
+  padding: 10px;
+  background-color: #4caf50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 1em;
+  cursor: pointer;
+}
+
+.confirmBtn:hover {
+  background-color: #45a049;
+}
+
+.cancelBtnModal {
+  flex: 1;
+  padding: 10px;
+  background-color: #999;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 1em;
+  cursor: pointer;
+}
+
+.cancelBtnModal:hover {
+  background-color: #777;
 }
 
 .version {
   text-align: center;
   margin-top: 20px;
   color: #888;
-  font-size: 0.8em;
+  font-size: 0.85em;
 }
