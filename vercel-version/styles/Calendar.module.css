@@ -45,7 +45,9 @@
 .calendarGrid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 8px;
+  gap: 0;
+  border-left: 1px solid #ddd;
+  border-top: 1px solid #ddd;
 }
 
 .dayHeader {
@@ -53,7 +55,8 @@
   font-weight: bold;
   padding: 12px 0;
   background-color: #f5f5f5;
-  border-radius: 4px;
+  border-right: 1px solid #ddd;
+  border-bottom: 1px solid #ddd;
   font-size: 1em;
 }
 
@@ -67,8 +70,8 @@
 
 .dayCell {
   min-height: 150px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border-right: 1px solid #ddd;
+  border-bottom: 1px solid #ddd;
   padding: 8px;
   background: white;
   display: flex;
@@ -147,10 +150,7 @@
   font-weight: 500;
 }
 
-.openLabel {
-  color: #4caf50;
-  font-size: 0.8em;
-}
+
 
 .cancelBtn {
   background-color: #f44336;

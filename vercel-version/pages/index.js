@@ -182,9 +182,7 @@ export default function Home() {
                                             취소
                                         </button>
                                     </div>
-                                ) : (
-                                    <div className={styles.openLabel}>신청 가능</div>
-                                )}
+                                ) : null}
                             </div>
                         ))}
                     </div>
