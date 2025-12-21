@@ -50,3 +50,12 @@ Thumbs.db
 
 # ── 도커 ───────────────────────────────────────────────────────────────
 docker/
+
+# ── Node.js / Next.js ───────────────────────────────────────────────
+node_modules/
+.next/
+out/
+.vercel/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
