@@ -46,8 +46,8 @@
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 0;
-  border-left: 1px solid #ddd;
-  border-top: 1px solid #ddd;
+  border-left: 2px solid #999;
+  border-top: 2px solid #999;
 }
 
 .dayHeader {
@@ -55,8 +55,8 @@
   font-weight: bold;
   padding: 12px 0;
   background-color: #f5f5f5;
-  border-right: 1px solid #ddd;
-  border-bottom: 1px solid #ddd;
+  border-right: 2px solid #999;
+  border-bottom: 2px solid #999;
   font-size: 1em;
 }
 
@@ -69,10 +69,10 @@
 }
 
 .dayCell {
-  min-height: 150px;
-  border-right: 1px solid #ddd;
-  border-bottom: 1px solid #ddd;
-  padding: 8px;
+  height: 127px;
+  border-right: 2px solid #999;
+  border-bottom: 2px solid #999;
+  padding: 0;
   background: white;
   display: flex;
   flex-direction: column;
@@ -86,8 +86,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
-  padding-bottom: 4px;
+  padding: 4px 6px;
   border-bottom: 1px solid #eee;
 }
 
@@ -106,21 +105,22 @@
 .shiftsContainer {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  flex: 1;
+  gap: 0;
 }
 
 .shiftSlot {
   padding: 6px;
-  border-radius: 4px;
   cursor: pointer;
   font-size: 0.85em;
   transition: all 0.2s;
 }
 
+.shiftSlot:not(:last-child) {
+  border-bottom: 1px solid #eee;
+}
+
 .open {
   background-color: #e8f5e9;
-  border: 1px solid #4caf50;
 }
 
 .open:hover {
@@ -130,7 +130,6 @@
 
 .confirmed {
   background-color: #e3f2fd;
-  border: 1px solid #2196f3;
 }
 
 .shiftName {
@@ -167,7 +166,9 @@
 }
 
 .emptyCell {
-  min-height: 150px;
+  height: 127px;
+  border-right: 2px solid #999;
+  border-bottom: 2px solid #999;
 }
 
 /* Modal Styles */
